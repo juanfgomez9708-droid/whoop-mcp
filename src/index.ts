@@ -181,6 +181,7 @@ export async function main(): Promise<void> {
           res: import("node:http").ServerResponse
         ) => void)
       | undefined;
+    let validateOAuthToken: ((token: string) => Promise<boolean>) | undefined;
     const connectorPassword = process.env.MCP_CONNECTOR_PASSWORD;
     const publicUrl = process.env.PUBLIC_URL;
     const allowedRedirectUris = process.env.ALLOWED_REDIRECT_URIS;
@@ -211,6 +212,15 @@ export async function main(): Promise<void> {
         res: import("node:http").ServerResponse
       ) => void;
       oauthCloseFn = oauthApp.close;
+      const { verifyToken } = await import("./transport/oauth-jwt.js");
+      validateOAuthToken = async (token: string): Promise<boolean> => {
+        try {
+          const r = await verifyToken(token, jwtSecret);
+          return r.type === "access";
+        } catch {
+          return false;
+        }
+      };
       logger.info("oauth connector mounted", { publicUrl });
     }
 
@@ -222,6 +232,8 @@ export async function main(): Promise<void> {
       trustProxy,
       healthCheck,
       oauthHandler,
+      validateOAuthToken,
+      publicUrl,
     });
     await server.connect(httpResult.transport);
     httpResults.push(httpResult);
