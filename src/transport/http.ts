@@ -59,6 +59,10 @@ export interface HttpServerOptions {
    * plug in OAuth JWT expiry checks.
    */
   validateBearerToken?: (token: string) => boolean;
+  /** Async validator for OAuth-issued JWTs on /mcp. */
+  validateOAuthToken?: (token: string) => Promise<boolean>;
+  /** Public https origin, used for OAuth challenge + resource metadata. */
+  publicUrl?: string;
 }
 
 export interface HttpServerResult {
@@ -196,6 +200,8 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     mcpRateLimit = { windowMs: 60_000, max: 100 },
     sseReauthIntervalMs = 5 * 60 * 1000,
     validateBearerToken,
+    validateOAuthToken,
+    publicUrl,
   } = options;
 
   if (!authToken) {
@@ -289,6 +295,16 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
       return;
     }
 
+    // Resource metadata so MCP clients can discover the authorization server
+    if (publicUrl && pathname === "/.well-known/oauth-protected-resource") {
+      sendJson(res, 200, {
+        resource: `${publicUrl}/mcp`,
+        authorization_servers: [publicUrl],
+        bearer_methods_supported: ["header"],
+      });
+      return;
+    }
+
     // OAuth connector routes — forward to mounted handler if configured
     if (
       oauthHandler &&
@@ -305,7 +321,21 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     if (pathname === "/mcp") {
       // Auth check
       const token = extractBearerToken(req);
-      if (!token || !safeTokenCompare(token, authToken)) {
+      let isValid = token !== null && safeTokenCompare(token, authToken);
+      if (!isValid && token && validateOAuthToken) {
+        isValid = await validateOAuthToken(token);
+      }
+      if (!isValid) {
+        if (publicUrl) {
+          res.setHeader(
+            "WWW-Authenticate",
+            `Bearer resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"`
+          );
+        }
+        sendJson(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      if (token === null) {
         sendJson(res, 401, { error: "Unauthorized" });
         return;
       }
