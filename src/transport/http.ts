@@ -297,10 +297,14 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
     // Resource metadata so MCP clients can discover the authorization server
     if (publicUrl && pathname === "/.well-known/oauth-protected-resource") {
+      // Issuer must match the authorization server metadata byte-for-byte,
+      // including the trailing slash the SDK emits.
+      const issuer = publicUrl.endsWith("/") ? publicUrl : `${publicUrl}/`;
       sendJson(res, 200, {
         resource: `${publicUrl}/mcp`,
-        authorization_servers: [publicUrl],
+        authorization_servers: [issuer],
         bearer_methods_supported: ["header"],
+        scopes_supported: ["mcp"],
       });
       return;
     }
