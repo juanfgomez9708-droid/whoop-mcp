@@ -584,10 +584,21 @@ export function createOAuthApp(options: CreateOAuthAppOptions): CreateOAuthAppRe
   // are completely silent and impossible to diagnose in production.
   app.use((req: Request, res: Response, next: NextFunction) => {
     const started = Date.now();
+    const path = req.originalUrl.split("?")[0];
+    // Capture the response body so SDK-handled OAuth errors (which are
+    // returned as JSON rather than thrown) are visible in logs.
+    const originalJson = res.json.bind(res);
+    res.json = (body: unknown): Response => {
+      if (res.statusCode >= 400) {
+        // eslint-disable-next-line no-console
+        console.error(`[oauth] ${path} ${res.statusCode} body: ${JSON.stringify(body)}`);
+      }
+      return originalJson(body);
+    };
     res.on("finish", () => {
       // eslint-disable-next-line no-console
       console.error(
-        `[oauth] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - started}ms)`
+        `[oauth] ${req.method} ${path} -> ${res.statusCode} (${Date.now() - started}ms)`
       );
     });
     next();
