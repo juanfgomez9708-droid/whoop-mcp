@@ -82,8 +82,12 @@ class StaticClientsStore implements OAuthRegisteredClientsStore {
    * ALLOWED_REDIRECT_URIS at authorize time, so this stays locked down.
    */
   registerClient(client: OAuthClientInformationFull): OAuthClientInformationFull {
+    // Drop any SDK-generated secret: we advertise token_endpoint_auth_method
+    // "none", so the client is public and must not be asked for a secret at
+    // the token endpoint (PKCE is what protects the exchange).
+    const { client_secret: _secret, client_secret_expires_at: _exp, ...rest } = client;
     const registered: OAuthClientInformationFull = {
-      ...client,
+      ...rest,
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
