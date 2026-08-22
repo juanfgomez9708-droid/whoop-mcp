@@ -580,6 +580,19 @@ export function createOAuthApp(options: CreateOAuthAppOptions): CreateOAuthAppRe
   // Apply a separate token rate limit before the SDK router handles /token
   app.post("/token", tokenLimiter);
 
+  // Request logging for OAuth routes — without this, token-exchange failures
+  // are completely silent and impossible to diagnose in production.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[oauth] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - started}ms)`
+      );
+    });
+    next();
+  });
+
   // SDK auth router: handles /authorize (POST forwarded), /token, /register,
   // metadata endpoints. Disable its own rate limiting since we set our own.
   app.use(
@@ -590,6 +603,18 @@ export function createOAuthApp(options: CreateOAuthAppOptions): CreateOAuthAppRe
       tokenOptions: { rateLimit: false },
     })
   );
+
+  // Surface errors thrown by the SDK router (invalid_client, PKCE failures,
+  // redirect_uri mismatches) instead of swallowing them.
+  app.use((err: Error, _req: Request, res: Response, next: NextFunction) => {
+    // eslint-disable-next-line no-console
+    console.error(`[oauth] ERROR: ${err.message}`);
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    res.status(400).json({ error: "invalid_request", error_description: err.message });
+  });
 
   return {
     app,
