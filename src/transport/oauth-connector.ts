@@ -58,6 +58,7 @@ export interface ConnectorClientConfig {
 
 class StaticClientsStore implements OAuthRegisteredClientsStore {
   private readonly client: OAuthClientInformationFull;
+  private readonly dynamic = new Map<string, OAuthClientInformationFull>();
 
   constructor(config: ConnectorClientConfig) {
     this.client = {
@@ -72,7 +73,23 @@ class StaticClientsStore implements OAuthRegisteredClientsStore {
   }
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
-    return clientId === this.client.client_id ? this.client : undefined;
+    if (clientId === this.client.client_id) return this.client;
+    return this.dynamic.get(clientId);
+  }
+
+  /**
+   * Dynamic client registration. Redirect URIs are still enforced against
+   * ALLOWED_REDIRECT_URIS at authorize time, so this stays locked down.
+   */
+  registerClient(client: OAuthClientInformationFull): OAuthClientInformationFull {
+    const registered: OAuthClientInformationFull = {
+      ...client,
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    };
+    this.dynamic.set(registered.client_id, registered);
+    return registered;
   }
 }
 
