@@ -234,8 +234,10 @@ export async function main(): Promise<void> {
       oauthHandler,
       validateOAuthToken,
       publicUrl,
+      // Fresh MCP server per request. Without this the HTTP transport can be
+      // initialized only once per process and every later client gets 400.
+      createMcpServer: () => createWhoopServer(client, { disableResources }).server,
     });
-    await server.connect(httpResult.transport);
     httpResults.push(httpResult);
 
     logger.info("http transport listening", {
