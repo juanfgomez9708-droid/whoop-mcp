@@ -61,13 +61,30 @@ export interface HttpServerOptions {
   validateBearerToken?: (token: string) => boolean;
   /** Async validator for OAuth-issued JWTs on /mcp. */
   validateOAuthToken?: (token: string) => Promise<boolean>;
+  /**
+   * Factory returning a FRESH MCP server instance for each /mcp request.
+   *
+   * When provided, the transport runs in stateless mode and a new
+   * transport + server pair is created per request. This is required for
+   * remote clients: a single long-lived stateful transport can only ever be
+   * initialized once (the SDK rejects every later `initialize` with
+   * 400 "Invalid Request: Server already initialized"), so the server would
+   * serve exactly one client per process lifetime and 400 forever after.
+   *
+   * When omitted, the legacy single stateful transport is used (local dev,
+   * existing tests).
+   */
+  createMcpServer?: () => {
+    connect: (transport: StreamableHTTPServerTransport) => Promise<void>;
+  };
   /** Public https origin, used for OAuth challenge + resource metadata. */
   publicUrl?: string;
 }
 
 export interface HttpServerResult {
   server: Server;
-  transport: StreamableHTTPServerTransport;
+  /** Present only in legacy shared-transport mode (no `createMcpServer`). */
+  transport?: StreamableHTTPServerTransport;
   /** Gracefully close the server and drain connections */
   close: () => Promise<void>;
 }
@@ -202,6 +219,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     validateBearerToken,
     validateOAuthToken,
     publicUrl,
+    createMcpServer,
   } = options;
 
   if (!authToken) {
@@ -258,10 +276,14 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     sseTimer.unref();
   }
 
-  // Create the SDK transport (stateful with session IDs)
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+  // Legacy shared stateful transport — only when no per-request factory is
+  // supplied. See `createMcpServer` in HttpServerOptions for why remote
+  // deployments must not use this.
+  const transport = createMcpServer
+    ? undefined
+    : new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
 
   // Create HTTP server
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -407,7 +429,21 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
       // Delegate to SDK transport
       try {
-        await transport.handleRequest(req, res, parsedBody);
+        if (createMcpServer) {
+          // Stateless: fresh transport + server per request so any number of
+          // clients can initialize, and a client re-connect never 400s.
+          const reqTransport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+            enableJsonResponse: true,
+          });
+          res.on("close", () => {
+            void reqTransport.close();
+          });
+          await createMcpServer().connect(reqTransport);
+          await reqTransport.handleRequest(req, res, parsedBody);
+        } else {
+          await transport!.handleRequest(req, res, parsedBody);
+        }
       } catch (error: unknown) {
         // If response hasn't been sent yet
         if (!res.headersSent) {
@@ -435,7 +471,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
       clearInterval(sseTimer);
       sseTimer = null;
     }
-    await transport.close();
+    await transport?.close();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => {
         if (err) reject(err);
