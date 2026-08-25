@@ -323,11 +323,32 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
     // Route: /mcp (all methods)
     if (pathname === "/mcp") {
+      // Log every /mcp request and its outcome — without this, session and
+      // auth failures on this route are completely invisible.
+      const mcpStarted = Date.now();
+      res.on("finish", () => {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[mcp] ${req.method} /mcp -> ${res.statusCode} (${Date.now() - mcpStarted}ms)`
+        );
+      });
       // Auth check
       const token = extractBearerToken(req);
       let isValid = token !== null && safeTokenCompare(token, authToken);
+      let staticOk = isValid;
       if (!isValid && token && validateOAuthToken) {
-        isValid = await validateOAuthToken(token);
+        try {
+          isValid = await validateOAuthToken(token);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error(`[mcp] JWT validation threw: ${(err as Error).message}`);
+        }
+      }
+      if (!isValid) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[mcp] auth rejected — token present: ${token !== null}, static match: ${staticOk}, oauth validator: ${validateOAuthToken !== undefined}`
+        );
       }
       if (!isValid) {
         if (publicUrl) {
